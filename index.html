@@ -28,6 +28,7 @@ body{padding:env(safe-area-inset-top,0) 16px calc(env(safe-area-inset-bottom,0) 
 .fps{position:absolute;top:8px;right:8px;font:500 11px var(--display);color:var(--dim);background:#000a;padding:3px 6px;border-radius:4px}
 .stage{touch-action:none;-webkit-user-select:none;user-select:none}
 .stage.detect{border-color:var(--ok);box-shadow:0 0 0 2px var(--ok)}
+.testchip{position:absolute;bottom:8px;left:8px;font:700 12px var(--display);letter-spacing:.06em;color:#000;background:var(--accent);padding:4px 8px;border-radius:4px}
 .zoom{position:absolute;bottom:8px;right:8px;font:700 13px var(--display);color:var(--fg);background:#000a;padding:4px 8px;border-radius:4px;border:1px solid var(--line)}
 .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;color:var(--dim);font-size:14px;line-height:1.6}
 .now{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-family:var(--display);font-variant-numeric:tabular-nums}
@@ -66,6 +67,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     <div class="chip" id="chip">NO MARKER</div>
     <div class="fps" id="fps">-- fps</div>
     <div class="zoom" id="zoomEl">1.0x</div>
+    <div class="testchip" id="testChip" hidden>TEST</div>
     <div class="msg" id="msg">OpenCV を読み込み中…</div>
   </div>
 
@@ -94,6 +96,9 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
       <label>マーカーID（空欄=すべて）
         <input type="text" id="mid" inputmode="numeric" placeholder="例: 0,1,2">
       </label>
+      <label>最小マーカー数
+        <input type="number" id="minMk" min="1" step="1" value="2">
+      </label>
       <label>最小ラップタイム（秒）
         <input type="number" id="minLap" min="0" step="0.5" value="5">
       </label>
@@ -108,8 +113,9 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
       </label>
       <label class="row"><input type="checkbox" id="mirror"> 表示を左右反転</label>
       <label class="row"><input type="checkbox" id="beep" checked> 通過音</label>
+      <label class="row"><input type="checkbox" id="test"> テストモード</label>
     </div>
-    <p class="hint">マーカーを検出したあと見えなくなった瞬間をゲート通過とします。通過時刻は最後にマーカーが見えたフレームの時刻です。前回の通過から最小ラップタイム未満で再度通過した場合は、新しいラップにせず直前のラップを上書きします。消失判定は、一瞬の検出漏れを通過と誤認しないための猶予時間です。</p>
+    <p class="hint">マーカーを検出したあと見えなくなった瞬間をゲート通過とします。通過時刻は最後にマーカーが見えたフレームの時刻です。前回の通過から最小ラップタイム未満で再度通過した場合は、新しいラップにせず直前のラップを上書きします。消失判定は、一瞬の検出漏れを通過と誤認しないための猶予時間です。最小マーカー数は、同時に検出したマーカーの数がこの数に達したときだけゲートとして扱う設定です。テストモードでは、およそ10秒に1回、映像に疑似マーカーを一瞬表示します。カメラを開始しなくても動きます。</p>
   </details>
 </div>
 
@@ -120,7 +126,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
   const chip=$('chip'), fpsEl=$('fps'), msg=$('msg');
   const nowLbl=$('nowLbl'), nowT=$('nowT'), stateEl=$('state'), lapsEl=$('laps');
   const startBtn=$('startBtn'), resetBtn=$('resetBtn');
-  const S = { dict:$('dict'), mid:$('mid'), minLap:$('minLap'), lostMs:$('lostMs'), procW:$('procW'), facing:$('facing'), mirror:$('mirror'), beep:$('beep') };
+  const S = { dict:$('dict'), mid:$('mid'), minLap:$('minLap'), lostMs:$('lostMs'), minMk:$('minMk'), test:$('test'), procW:$('procW'), facing:$('facing'), mirror:$('mirror'), beep:$('beep') };
 
   // ---- 設定の保存/復元 ----
   const KEY='aruco-lap-settings-v2';
@@ -128,7 +134,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     for(const k in S){ if(s[k]!==undefined){ if(S[k].type==='checkbox') S[k].checked=s[k]; else S[k].value=s[k]; } }
   }catch(e){}
   function save(){ try{ const o={}; for(const k in S) o[k]=S[k].type==='checkbox'?S[k].checked:S[k].value; localStorage.setItem(KEY,JSON.stringify(o)); }catch(e){} }
-  for(const k in S) S[k].addEventListener('change',()=>{ save(); if(k==='dict') buildDetector(); if(k==='mirror') applyMirror(); if(k==='facing' && stream) startCamera(); });
+  for(const k in S) S[k].addEventListener('change',()=>{ save(); if(k==='dict'){ buildDetector(); mkCache.clear(); } if(k==='test') onTestToggle(); if(k==='mirror') applyMirror(); if(k==='facing' && stream) startCamera(); });
   function applyMirror(){ $('stage').classList.toggle('mirror', S.mirror.checked); }
   applyMirror();
 
@@ -189,13 +195,14 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
   }
 
   // ---- OpenCV ----
-  let cvReady=false, detector=null, src=null, gray=null, corners=null, ids=null, rejected=null;
+  let cvReady=false, dictObj=null, detector=null, src=null, gray=null, corners=null, ids=null, rejected=null;
   const proc=$('view'), pctx=proc.getContext('2d',{willReadFrequently:true});
   function buildDetector(){
     if(!cvReady) return;
     try{
       if(detector){ detector.delete(); detector=null; }
       const dict = cv.getPredefinedDictionary(parseInt(S.dict.value,10));
+      dictObj = dict;
       const params = new cv.aruco_DetectorParameters();
       const refine = new cv.aruco_RefineParameters(10, 3, true);
       detector = new cv.aruco_ArucoDetector(dict, params, refine);
@@ -208,6 +215,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     buildDetector();
     msg.textContent='「カメラ開始」を押してください。';
     startBtn.disabled=false;
+    onTestToggle();
   }
   window.__onCvLoaded = function(){
     if(typeof cv==='undefined'){ msg.textContent='OpenCVの読み込みに失敗しました。'; return; }
@@ -267,12 +275,59 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
   document.addEventListener('visibilitychange',async()=>{ if(document.visibilityState==='visible' && stream){ try{ wakeLock=await navigator.wakeLock?.request('screen'); }catch(e){} } });
 
   // ---- フレーム処理 ----
-  let seen=false, lastSeenT=0, frames=0, fpsT=performance.now(), loopRunning=false;
+  let seen=false, maxCnt=0, lastSeenT=0, frames=0, fpsT=performance.now(), loopRunning=false;
   function scheduleFrame(){
     if(loopRunning) return; loopRunning=true;
-    const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
-    const step = (now)=>{ processFrame(now); useRVFC ? video.requestVideoFrameCallback(step) : requestAnimationFrame(step); };
-    useRVFC ? video.requestVideoFrameCallback(step) : requestAnimationFrame(step);
+    const next = step => (stream && video.videoWidth && 'requestVideoFrameCallback' in video) ? video.requestVideoFrameCallback(step) : requestAnimationFrame(step);
+    const step = now => { try{ processFrame(now); }catch(e){ console.error(e); } next(step); };
+    next(step);
+  }
+
+  // ---- テストモード ----
+  const mkCache=new Map(); const testChip=$('testChip');
+  let testNext=0, testUntil=0, testLayout=null;
+  const rnd=(a,b)=>a+Math.random()*(b-a);
+  function onTestToggle(){
+    const on=S.test.checked;
+    testChip.hidden=!on;
+    testNext=performance.now()+rnd(3000,6000); testUntil=0;
+    if(on){ msg.hidden=true; if(cvReady) scheduleFrame(); }
+    else if(!stream && cvReady){ msg.hidden=false; octx.clearRect(0,0,overlay.width,overlay.height); pctx.clearRect(0,0,proc.width,proc.height); }
+  }
+  function markerCanvas(id,size){
+    const key=id+'_'+size; if(mkCache.has(key)) return mkCache.get(key);
+    const m=new cv.Mat(); cv.generateImageMarker(dictObj,id,size,m,1);
+    const c=document.createElement('canvas'); c.width=size; c.height=size;
+    const g=c.getContext('2d'), im=g.createImageData(size,size);
+    for(let i=0;i<size*size;i++){ const v=m.data[i]; im.data[i*4]=v; im.data[i*4+1]=v; im.data[i*4+2]=v; im.data[i*4+3]=255; }
+    g.putImageData(im,0,0); m.delete(); mkCache.set(key,c); return c;
+  }
+  function testIds(n){
+    const v=S.mid.value.trim();
+    const pool = v ? v.split(/[,\s]+/).filter(Boolean).map(Number) : [0,1,2,3,4,5];
+    const out=[]; for(let i=0;i<n;i++) out.push(pool[i%pool.length]); return out;
+  }
+  function drawTest(now,pw,ph){
+    if(now>=testNext && now>=testUntil){
+      const need=Math.max(1,parseInt(S.minMk.value,10)||1);
+      const n=need+(Math.random()<0.3?1:0);
+      const size=Math.round(pw*rnd(0.13,0.2));
+      const gap=size*0.4, total=n*size+(n-1)*gap;
+      const x0=rnd(size*0.3, Math.max(size*0.3, pw-total-size*0.3)), y0=rnd(ph*0.15, ph*0.85-size);
+      testLayout={ids:testIds(n),size,x0,y0,gap};
+      testUntil=now+rnd(400,900);
+      testNext=testUntil+rnd(8000,12000);
+    }
+    if(now<testUntil && testLayout){
+      const L=testLayout, q=Math.round(L.size/6);
+      L.ids.forEach((id,i)=>{
+        const x=L.x0+i*(L.size+L.gap), y=L.y0;
+        pctx.fillStyle='#fff'; pctx.fillRect(x-q,y-q,L.size+2*q,L.size+2*q);
+        pctx.imageSmoothingEnabled=false; pctx.drawImage(markerCanvas(id,L.size),x,y);
+      });
+    }
+    const left=Math.max(0,(testNext-now)/1000);
+    testChip.textContent = now<testUntil ? 'TEST 表示中' : 'TEST 次まで '+left.toFixed(1)+'s';
   }
   function matchesId(id){
     const v=S.mid.value.trim(); if(!v) return true;
@@ -296,8 +351,11 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     octx.fillStyle='#ffb627'; octx.fillText(txt,minX+2,ly);
   }
   function processFrame(now){
-    if(!cvReady||!detector||!video.videoWidth) return;
-    const vw=video.videoWidth, vh=video.videoHeight;
+    if(!cvReady||!detector) return;
+    const hasVid = !!(stream && video.videoWidth);
+    const testOn = S.test.checked;
+    if(!hasVid && !testOn) return;
+    const vw=hasVid?video.videoWidth:640, vh=hasVid?video.videoHeight:480;
     // 映像の上端から 4:3 の範囲を切り出す（横幅いっぱい。収まらない場合は高さいっぱいで左右中央）
     let cw=vw, ch=Math.round(vw*3/4), cx=0;
     if(ch>vh){ ch=vh; cw=Math.round(vh*4/3); cx=Math.round((vw-cw)/2); }
@@ -307,7 +365,9 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     if(proc.width!==pw||proc.height!==ph){ proc.width=pw; proc.height=ph;
       if(src){src.delete(); gray.delete();} src=new cv.Mat(ph,pw,cv.CV_8UC4); gray=new cv.Mat(); }
     if(overlay.width!==pw||overlay.height!==ph){ overlay.width=pw; overlay.height=ph; }
-    pctx.drawImage(video,cx,cy,cw,ch,0,0,pw,ph);
+    if(hasVid) pctx.drawImage(video,cx,cy,cw,ch,0,0,pw,ph);
+    else { pctx.fillStyle='#3a4450'; pctx.fillRect(0,0,pw,ph); pctx.fillStyle='#55606c'; for(let gx=0;gx<pw;gx+=40) pctx.fillRect(gx,0,1,ph); for(let gy=0;gy<ph;gy+=40) pctx.fillRect(0,gy,pw,1); }
+    if(testOn) drawTest(now,pw,ph);
     src.data.set(pctx.getImageData(0,0,pw,ph).data);
     cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
     detector.detectMarkers(gray,corners,ids,rejected);
@@ -321,13 +381,18 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
       drawMarker(c,id,pw);
     }
 
-    if(found){ seen=true; lastSeenT=now; }
+    const need=Math.max(1,parseInt(S.minMk.value,10)||1);
+    const cnt=foundIds.length;
+    if(found){ if(!seen) maxCnt=0; seen=true; lastSeenT=now; maxCnt=Math.max(maxCnt,cnt); }
     else if(seen && now-lastSeenT >= (parseFloat(S.lostMs.value)||0)){
-      seen=false; onPass(lastSeenT);
+      seen=false;
+      if(maxCnt>=need) onPass(lastSeenT);
+      else stateEl.textContent='マーカー数不足（'+maxCnt+'/'+need+'）のため通過として扱いませんでした';
     }
-    chip.textContent = found ? 'MARKER '+foundIds.join(',') : (seen ? 'LOST…' : 'NO MARKER');
-    chip.classList.toggle('on',found);
-    stage.classList.toggle('detect',found);
+    const ok = cnt>=need;
+    chip.textContent = found ? 'MARKER '+cnt+'/'+need+'  ID '+foundIds.join(',') : (seen ? 'LOST…' : 'NO MARKER');
+    chip.classList.toggle('on',ok);
+    stage.classList.toggle('detect',ok);
 
     frames++; if(now-fpsT>1000){ fpsEl.textContent=Math.round(frames*1000/(now-fpsT))+' fps'; frames=0; fpsT=now; }
   }
