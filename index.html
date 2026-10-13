@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ArUco FPVラップタイマー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&display=swap">
+<style>
+/* Layout: カメラ映像 → 現在ラップ → ラップ一覧 → 操作 → 設定 の縦1カラム */
+:root{
+  --bg:#0d1014; --panel:#161b22; --line:#28303a; --fg:#e8edf2; --dim:#8b97a5;
+  --accent:#ffb627; --ok:#3ddc84; --warn:#ff5d5d;
+  --display:"Chakra Petch", ui-monospace, "SF Mono", Menlo, monospace;
+  --body:-apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body)}
+body{padding:env(safe-area-inset-top,0) 16px calc(env(safe-area-inset-bottom,0) + 16px)}
+.wrap{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:12px;padding-block:12px}
+.stage{position:relative;width:100%;aspect-ratio:4/3;background:#000;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
+.stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.stage.mirror video,.stage.mirror canvas{transform:scaleX(-1)}
+.chip{position:absolute;top:8px;left:8px;font:700 12px var(--display);letter-spacing:.08em;padding:4px 8px;border-radius:4px;background:#000a;border:1px solid var(--line);color:var(--dim)}
+.chip.on{color:#000;background:var(--ok);border-color:var(--ok)}
+.fps{position:absolute;top:8px;right:8px;font:500 11px var(--display);color:var(--dim);background:#000a;padding:3px 6px;border-radius:4px}
+.msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;color:var(--dim);font-size:14px;line-height:1.6}
+.now{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-family:var(--display);font-variant-numeric:tabular-nums}
+.now .lbl{font-size:14px;letter-spacing:.1em;color:var(--dim)}
+.now .t{font-size:clamp(40px,12vw,64px);font-weight:700;color:var(--accent);line-height:1}
+.state{font-size:13px;color:var(--dim)}
+.laps{list-style:none;margin:0;padding:0;border-top:1px solid var(--line);max-height:40vh;overflow:auto}
+.laps li{display:flex;justify-content:space-between;align-items:center;padding:8px 2px;border-bottom:1px solid var(--line);font:500 22px var(--display);font-variant-numeric:tabular-nums}
+.laps li .n{color:var(--dim);letter-spacing:.06em}
+.laps li.best .v{color:var(--ok)}
+.laps li.flash{animation:flash .8s}
+.laps li .tag{font:500 11px var(--body);color:var(--warn);margin-left:8px}
+.laps .empty{color:var(--dim);font:14px var(--body);justify-content:flex-start}
+@keyframes flash{from{background:#ffb62740}to{background:transparent}}
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+button{font:700 16px var(--display);letter-spacing:.06em;padding:14px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
+button.primary{background:var(--accent);color:#000;border-color:var(--accent)}
+button.danger{border-color:var(--warn);color:var(--warn)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+summary{font:700 14px var(--display);letter-spacing:.08em;cursor:pointer}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim);min-width:0}
+label.row{flex-direction:row;align-items:center;gap:8px;color:var(--fg);font-size:14px}
+select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%}
+.hint{font-size:12px;color:var(--dim);line-height:1.6;margin:8px 0 0}
+@media (prefers-reduced-motion:reduce){.laps li.flash{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div class="chip" id="chip">NO MARKER</div>
+    <div class="fps" id="fps">-- fps</div>
+    <div class="msg" id="msg">OpenCV を読み込み中…</div>
+  </div>
+
+  <div class="now"><span class="lbl" id="nowLbl">READY</span><span class="t" id="nowT">0.0000</span></div>
+  <div class="state" id="state">リセット後、最初のゲート通過から計測を始めます。</div>
+
+  <ul class="laps" id="laps"><li class="empty">ラップはまだありません</li></ul>
+
+  <div class="btns">
+    <button class="primary" id="startBtn" disabled>カメラ開始</button>
+    <button class="danger" id="resetBtn">リセット</button>
+  </div>
+
+  <details id="settings">
+    <summary>設定</summary>
+    <div class="grid">
+      <label>マーカー種類
+        <select id="dict">
+          <option value="0">4x4_50</option><option value="1">4x4_100</option><option value="2">4x4_250</option><option value="3">4x4_1000</option>
+          <option value="4">5x5_50</option><option value="5">5x5_100</option><option value="6">5x5_250</option><option value="7">5x5_1000</option>
+          <option value="8">6x6_50</option><option value="9">6x6_100</option><option value="10">6x6_250</option><option value="11">6x6_1000</option>
+          <option value="12">7x7_50</option><option value="13">7x7_100</option><option value="14">7x7_250</option><option value="15">7x7_1000</option>
+          <option value="16">ARUCO_ORIGINAL</option>
+        </select>
+      </label>
+      <label>マーカーID（空欄=すべて）
+        <input type="text" id="mid" inputmode="numeric" placeholder="例: 0,1,2">
+      </label>
+      <label>最小ラップタイム（秒）
+        <input type="number" id="minLap" min="0" step="0.5" value="5">
+      </label>
+      <label>消失判定（ms）
+        <input type="number" id="lostMs" min="0" step="10" value="120">
+      </label>
+      <label>解析幅（px）
+        <select id="procW"><option>320</option><option>480</option><option selected>640</option><option>960</option></select>
+      </label>
+      <label>カメラ
+        <select id="facing"><option value="user" selected>前面</option><option value="environment">背面</option></select>
+      </label>
+      <label class="row"><input type="checkbox" id="mirror"> 表示を左右反転</label>
+      <label class="row"><input type="checkbox" id="beep" checked> 通過音</label>
+    </div>
+    <p class="hint">マーカーを検出したあと見えなくなった瞬間をゲート通過とします。通過時刻は最後にマーカーが見えたフレームの時刻です。前回の通過から最小ラップタイム未満で再度通過した場合は、新しいラップにせず直前のラップを上書きします。消失判定は、一瞬の検出漏れを通過と誤認しないための猶予時間です。</p>
+  </details>
+</div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const video=$('video'), overlay=$('overlay'), octx=overlay.getContext('2d');
+  const chip=$('chip'), fpsEl=$('fps'), msg=$('msg');
+  const nowLbl=$('nowLbl'), nowT=$('nowT'), stateEl=$('state'), lapsEl=$('laps');
+  const startBtn=$('startBtn'), resetBtn=$('resetBtn');
+  const S = { dict:$('dict'), mid:$('mid'), minLap:$('minLap'), lostMs:$('lostMs'), procW:$('procW'), facing:$('facing'), mirror:$('mirror'), beep:$('beep') };
+
+  // ---- 設定の保存/復元 ----
+  const KEY='aruco-lap-settings';
+  try{ const s=JSON.parse(localStorage.getItem(KEY)||'{}');
+    for(const k in S){ if(s[k]!==undefined){ if(S[k].type==='checkbox') S[k].checked=s[k]; else S[k].value=s[k]; } }
+  }catch(e){}
+  function save(){ try{ const o={}; for(const k in S) o[k]=S[k].type==='checkbox'?S[k].checked:S[k].value; localStorage.setItem(KEY,JSON.stringify(o)); }catch(e){} }
+  for(const k in S) S[k].addEventListener('change',()=>{ save(); if(k==='dict') buildDetector(); if(k==='mirror') applyMirror(); if(k==='facing' && stream) startCamera(); });
+  function applyMirror(){ $('stage').classList.toggle('mirror', S.mirror.checked); }
+  applyMirror();
+
+  // ---- ラップ計測 ----
+  let lastPass=null, prevPass=null, laps=[], overwritten=new Set();
+  function reset(){
+    lastPass=null; prevPass=null; laps=[]; overwritten.clear();
+    nowLbl.textContent='READY'; nowT.textContent='0.0000';
+    stateEl.textContent='リセットしました。最初のゲート通過から計測を始めます。';
+    renderLaps();
+  }
+  function onPass(t){
+    const minLap = Math.max(0, parseFloat(S.minLap.value)||0)*1000;
+    if(lastPass===null){
+      lastPass=t; stateEl.textContent='スタート（1回目の通過）'; beep(880);
+    } else if(t-lastPass >= minLap){
+      laps.push(t-lastPass); prevPass=lastPass; lastPass=t;
+      stateEl.textContent='LAP'+laps.length+' 記録'; beep(1320); renderLaps(true);
+    } else {
+      // 最小ラップ未満 → 上書き
+      if(laps.length && prevPass!==null){
+        laps[laps.length-1]=t-prevPass; overwritten.add(laps.length-1);
+        stateEl.textContent='LAP'+laps.length+' を上書き';
+      } else {
+        stateEl.textContent='スタート時刻を上書き';
+      }
+      lastPass=t; beep(660); renderLaps(true);
+    }
+  }
+  const fmt = ms => (ms/1000).toFixed(4);
+  function renderLaps(flash){
+    lapsEl.textContent='';
+    if(!laps.length){ const li=document.createElement('li'); li.className='empty'; li.textContent='ラップはまだありません'; lapsEl.appendChild(li); return; }
+    const best=Math.min(...laps);
+    for(let i=laps.length-1;i>=0;i--){
+      const li=document.createElement('li');
+      if(laps[i]===best && laps.length>1) li.classList.add('best');
+      if(flash && i===laps.length-1) li.classList.add('flash');
+      const n=document.createElement('span'); n.className='n'; n.textContent='LAP'+(i+1);
+      if(overwritten.has(i)){ const tg=document.createElement('span'); tg.className='tag'; tg.textContent='上書き'; n.appendChild(tg); }
+      const v=document.createElement('span'); v.className='v'; v.textContent=fmt(laps[i]);
+      li.append(n,v); lapsEl.appendChild(li);
+    }
+  }
+  function tickClock(){
+    if(lastPass!==null){ nowLbl.textContent='LAP'+(laps.length+1); nowT.textContent=fmt(performance.now()-lastPass); }
+    requestAnimationFrame(tickClock);
+  }
+  requestAnimationFrame(tickClock);
+  resetBtn.addEventListener('click',()=>{ reset(); initAudio(); });
+
+  // ---- 音 ----
+  let ac=null;
+  function initAudio(){ try{ if(!ac) ac=new (window.AudioContext||window.webkitAudioContext)(); if(ac.state==='suspended') ac.resume(); }catch(e){} }
+  function beep(f){
+    if(!S.beep.checked||!ac) return;
+    try{ const o=ac.createOscillator(), g=ac.createGain(); o.frequency.value=f; g.gain.setValueAtTime(.25,ac.currentTime); g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+.15); o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime+.16); }catch(e){}
+  }
+
+  // ---- OpenCV ----
+  let cvReady=false, detector=null, src=null, gray=null, corners=null, ids=null, rejected=null;
+  const proc=document.createElement('canvas'), pctx=proc.getContext('2d',{willReadFrequently:true});
+  function buildDetector(){
+    if(!cvReady) return;
+    try{
+      if(detector){ detector.delete(); detector=null; }
+      const dict = cv.getPredefinedDictionary(parseInt(S.dict.value,10));
+      const params = new cv.aruco_DetectorParameters();
+      const refine = new cv.aruco_RefineParameters(10, 3, true);
+      detector = new cv.aruco_ArucoDetector(dict, params, refine);
+    }catch(e){ msg.hidden=false; msg.textContent='ArUco検出器を作れませんでした: '+e; console.error(e); }
+  }
+  function onCv(){
+    cvReady=true;
+    corners=new cv.MatVector(); ids=new cv.Mat(); rejected=new cv.MatVector();
+    buildDetector();
+    msg.textContent='「カメラ開始」を押してください。';
+    startBtn.disabled=false;
+  }
+  window.__onCvLoaded = function(){
+    if(typeof cv==='undefined'){ msg.textContent='OpenCVの読み込みに失敗しました。'; return; }
+    if(cv instanceof Promise || typeof cv.then==='function'){ cv.then(m=>{ window.cv=m; onCv(); }); }
+    else if(cv.Mat){ onCv(); }
+    else { cv['onRuntimeInitialized']=onCv; }
+  };
+
+  // ---- カメラ ----
+  let stream=null, wakeLock=null;
+  async function startCamera(){
+    initAudio();
+    try{
+      if(stream) stream.getTracks().forEach(t=>t.stop());
+      stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:S.facing.value, width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:60}}});
+      video.srcObject=stream; await video.play();
+      msg.hidden=true; startBtn.textContent='カメラ再起動';
+      try{ wakeLock = await navigator.wakeLock?.request('screen'); }catch(e){}
+      scheduleFrame();
+    }catch(e){ msg.hidden=false; msg.textContent='カメラを開けません: '+(e.message||e)+'（HTTPSで開いているか、カメラの許可を確認してください）'; }
+  }
+  startBtn.addEventListener('click',startCamera);
+  document.addEventListener('visibilitychange',async()=>{ if(document.visibilityState==='visible' && stream){ try{ wakeLock=await navigator.wakeLock?.request('screen'); }catch(e){} } });
+
+  // ---- フレーム処理 ----
+  let seen=false, lastSeenT=0, frames=0, fpsT=performance.now(), loopRunning=false;
+  function scheduleFrame(){
+    if(loopRunning) return; loopRunning=true;
+    const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+    const step = (now)=>{ processFrame(now); useRVFC ? video.requestVideoFrameCallback(step) : requestAnimationFrame(step); };
+    useRVFC ? video.requestVideoFrameCallback(step) : requestAnimationFrame(step);
+  }
+  function matchesId(id){
+    const v=S.mid.value.trim(); if(!v) return true;
+    return v.split(/[,\s]+/).filter(Boolean).map(Number).includes(id);
+  }
+  function processFrame(now){
+    if(!cvReady||!detector||!video.videoWidth) return;
+    const vw=video.videoWidth, vh=video.videoHeight;
+    const pw=Math.min(parseInt(S.procW.value,10)||640, vw), ph=Math.round(vh*pw/vw);
+    if(proc.width!==pw||proc.height!==ph){ proc.width=pw; proc.height=ph;
+      if(src){src.delete(); gray.delete();} src=new cv.Mat(ph,pw,cv.CV_8UC4); gray=new cv.Mat(); }
+    if(overlay.width!==pw||overlay.height!==ph){ overlay.width=pw; overlay.height=ph; }
+    pctx.drawImage(video,0,0,pw,ph);
+    src.data.set(pctx.getImageData(0,0,pw,ph).data);
+    cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+    detector.detectMarkers(gray,corners,ids,rejected);
+
+    octx.clearRect(0,0,pw,ph);
+    let found=false, foundIds=[];
+    for(let i=0;i<ids.rows;i++){
+      const id=ids.data32S[i]; if(!matchesId(id)) continue;
+      found=true; foundIds.push(id);
+      const c=corners.get(i).data32F;
+      octx.strokeStyle='#3ddc84'; octx.lineWidth=3; octx.beginPath();
+      octx.moveTo(c[0],c[1]); for(let k=1;k<4;k++) octx.lineTo(c[k*2],c[k*2+1]); octx.closePath(); octx.stroke();
+      octx.fillStyle='#ffb627'; octx.font='bold 16px sans-serif'; octx.fillText('ID '+id,c[0],c[1]-6);
+    }
+
+    if(found){ seen=true; lastSeenT=now; }
+    else if(seen && now-lastSeenT >= (parseFloat(S.lostMs.value)||0)){
+      seen=false; onPass(lastSeenT);
+    }
+    chip.textContent = found ? 'MARKER '+foundIds.join(',') : (seen ? 'LOST…' : 'NO MARKER');
+    chip.classList.toggle('on',found);
+
+    frames++; if(now-fpsT>1000){ fpsEl.textContent=Math.round(frames*1000/(now-fpsT))+' fps'; frames=0; fpsT=now; }
+  }
+})();
+</script>
+<script async src="https://docs.opencv.org/4.10.0/opencv.js" onload="__onCvLoaded()" onerror="document.getElementById('msg').textContent='OpenCV.jsを読み込めませんでした（ネット接続を確認）'"></script>
+</body>
+</html>
