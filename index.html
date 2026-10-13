@@ -27,6 +27,7 @@ body{padding:env(safe-area-inset-top,0) 16px calc(env(safe-area-inset-bottom,0) 
 .chip.on{color:#000;background:var(--ok);border-color:var(--ok)}
 .fps{position:absolute;top:8px;right:8px;font:500 11px var(--display);color:var(--dim);background:#000a;padding:3px 6px;border-radius:4px}
 .stage{touch-action:none;-webkit-user-select:none;user-select:none}
+.stage.detect{border-color:var(--ok);box-shadow:0 0 0 2px var(--ok)}
 .zoom{position:absolute;bottom:8px;right:8px;font:700 13px var(--display);color:var(--fg);background:#000a;padding:4px 8px;border-radius:4px;border:1px solid var(--line)}
 .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;color:var(--dim);font-size:14px;line-height:1.6}
 .now{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-family:var(--display);font-variant-numeric:tabular-nums}
@@ -277,6 +278,23 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     const v=S.mid.value.trim(); if(!v) return true;
     return v.split(/[,\s]+/).filter(Boolean).map(Number).includes(id);
   }
+  function drawMarker(c,id,pw){
+    const lw=Math.max(4,pw/90);
+    octx.lineJoin='round';
+    octx.beginPath(); octx.moveTo(c[0],c[1]); for(let k=1;k<4;k++) octx.lineTo(c[k*2],c[k*2+1]); octx.closePath();
+    octx.fillStyle='rgba(61,220,132,0.25)'; octx.fill();
+    octx.strokeStyle='#000'; octx.lineWidth=lw+3; octx.stroke();
+    octx.strokeStyle='#3ddc84'; octx.lineWidth=lw; octx.stroke();
+    // 左上の角（マーカーの向き）を赤で示す
+    octx.fillStyle='#ff5d5d'; octx.beginPath(); octx.arc(c[0],c[1],lw*1.4,0,Math.PI*2); octx.fill();
+    // ID ラベル
+    const minY=Math.min(c[1],c[3],c[5],c[7]), minX=Math.min(c[0],c[2],c[4],c[6]);
+    const fs=Math.max(16,pw/28); octx.font='bold '+fs+'px sans-serif';
+    const txt='ID '+id, tw=octx.measureText(txt).width;
+    const ly=Math.max(fs+4,minY-lw-4);
+    octx.fillStyle='rgba(0,0,0,0.7)'; octx.fillRect(minX-2,ly-fs,tw+8,fs+6);
+    octx.fillStyle='#ffb627'; octx.fillText(txt,minX+2,ly);
+  }
   function processFrame(now){
     if(!cvReady||!detector||!video.videoWidth) return;
     const vw=video.videoWidth, vh=video.videoHeight;
@@ -299,10 +317,8 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     for(let i=0;i<ids.rows;i++){
       const id=ids.data32S[i]; if(!matchesId(id)) continue;
       found=true; foundIds.push(id);
-      const c=corners.get(i).data32F;
-      octx.strokeStyle='#3ddc84'; octx.lineWidth=3; octx.beginPath();
-      octx.moveTo(c[0],c[1]); for(let k=1;k<4;k++) octx.lineTo(c[k*2],c[k*2+1]); octx.closePath(); octx.stroke();
-      octx.fillStyle='#ffb627'; octx.font='bold 16px sans-serif'; octx.fillText('ID '+id,c[0],c[1]-6);
+      const cm=corners.get(i); const c=Array.from(cm.data32F); cm.delete();
+      drawMarker(c,id,pw);
     }
 
     if(found){ seen=true; lastSeenT=now; }
@@ -311,6 +327,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     }
     chip.textContent = found ? 'MARKER '+foundIds.join(',') : (seen ? 'LOST…' : 'NO MARKER');
     chip.classList.toggle('on',found);
+    stage.classList.toggle('detect',found);
 
     frames++; if(now-fpsT>1000){ fpsEl.textContent=Math.round(frames*1000/(now-fpsT))+' fps'; frames=0; fpsT=now; }
   }
