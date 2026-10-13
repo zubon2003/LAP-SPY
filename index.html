@@ -20,8 +20,9 @@ html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body)}
 body{padding:env(safe-area-inset-top,0) 16px calc(env(safe-area-inset-bottom,0) + 16px)}
 .wrap{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:12px;padding-block:12px}
 .stage{position:relative;width:100%;aspect-ratio:4/3;background:#000;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
-.stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
-.stage.mirror video,.stage.mirror canvas{transform:scaleX(-1)}
+.stage video{position:absolute;inset:0;width:100%;height:100%;opacity:0;pointer-events:none}
+.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.stage.mirror canvas{transform:scaleX(-1)}
 .chip{position:absolute;top:8px;left:8px;font:700 12px var(--display);letter-spacing:.08em;padding:4px 8px;border-radius:4px;background:#000a;border:1px solid var(--line);color:var(--dim)}
 .chip.on{color:#000;background:var(--ok);border-color:var(--ok)}
 .fps{position:absolute;top:8px;right:8px;font:500 11px var(--display);color:var(--dim);background:#000a;padding:3px 6px;border-radius:4px}
@@ -57,6 +58,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
 <div class="wrap">
   <div class="stage" id="stage">
     <video id="video" playsinline muted autoplay></video>
+    <canvas id="view"></canvas>
     <canvas id="overlay"></canvas>
     <div class="chip" id="chip">NO MARKER</div>
     <div class="fps" id="fps">-- fps</div>
@@ -98,7 +100,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
         <select id="procW"><option>320</option><option>480</option><option selected>640</option><option>960</option></select>
       </label>
       <label>カメラ
-        <select id="facing"><option value="user" selected>前面</option><option value="environment">背面</option></select>
+        <select id="facing"><option value="environment" selected>背面</option><option value="user">前面</option></select>
       </label>
       <label class="row"><input type="checkbox" id="mirror"> 表示を左右反転</label>
       <label class="row"><input type="checkbox" id="beep" checked> 通過音</label>
@@ -117,7 +119,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
   const S = { dict:$('dict'), mid:$('mid'), minLap:$('minLap'), lostMs:$('lostMs'), procW:$('procW'), facing:$('facing'), mirror:$('mirror'), beep:$('beep') };
 
   // ---- 設定の保存/復元 ----
-  const KEY='aruco-lap-settings';
+  const KEY='aruco-lap-settings-v2';
   try{ const s=JSON.parse(localStorage.getItem(KEY)||'{}');
     for(const k in S){ if(s[k]!==undefined){ if(S[k].type==='checkbox') S[k].checked=s[k]; else S[k].value=s[k]; } }
   }catch(e){}
@@ -184,7 +186,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
 
   // ---- OpenCV ----
   let cvReady=false, detector=null, src=null, gray=null, corners=null, ids=null, rejected=null;
-  const proc=document.createElement('canvas'), pctx=proc.getContext('2d',{willReadFrequently:true});
+  const proc=$('view'), pctx=proc.getContext('2d',{willReadFrequently:true});
   function buildDetector(){
     if(!cvReady) return;
     try{
@@ -241,11 +243,14 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
   function processFrame(now){
     if(!cvReady||!detector||!video.videoWidth) return;
     const vw=video.videoWidth, vh=video.videoHeight;
-    const pw=Math.min(parseInt(S.procW.value,10)||640, vw), ph=Math.round(vh*pw/vw);
+    // 映像の上端から 4:3 の範囲を切り出す（横幅いっぱい。収まらない場合は高さいっぱいで左右中央）
+    let cw=vw, ch=Math.round(vw*3/4), cx=0;
+    if(ch>vh){ ch=vh; cw=Math.round(vh*4/3); cx=Math.round((vw-cw)/2); }
+    const pw=Math.min(parseInt(S.procW.value,10)||640, cw), ph=Math.round(pw*3/4);
     if(proc.width!==pw||proc.height!==ph){ proc.width=pw; proc.height=ph;
       if(src){src.delete(); gray.delete();} src=new cv.Mat(ph,pw,cv.CV_8UC4); gray=new cv.Mat(); }
     if(overlay.width!==pw||overlay.height!==ph){ overlay.width=pw; overlay.height=ph; }
-    pctx.drawImage(video,0,0,pw,ph);
+    pctx.drawImage(video,cx,0,cw,ch,0,0,pw,ph);
     src.data.set(pctx.getImageData(0,0,pw,ph).data);
     cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
     detector.detectMarkers(gray,corners,ids,rejected);
