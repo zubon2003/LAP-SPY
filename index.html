@@ -196,6 +196,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     }catch(e){ msg.hidden=false; msg.textContent='ArUco検出器を作れませんでした: '+e; console.error(e); }
   }
   function onCv(){
+    if(cvReady) return;
     cvReady=true;
     corners=new cv.MatVector(); ids=new cv.Mat(); rejected=new cv.MatVector();
     buildDetector();
@@ -204,8 +205,8 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
   }
   window.__onCvLoaded = function(){
     if(typeof cv==='undefined'){ msg.textContent='OpenCVの読み込みに失敗しました。'; return; }
-    if(cv instanceof Promise || typeof cv.then==='function'){ cv.then(m=>{ window.cv=m; onCv(); }); }
-    else if(cv.Mat){ onCv(); }
+    if(cv.Mat){ onCv(); }
+    else if(typeof cv.then==='function'){ cv.then(m=>{ window.cv=m; onCv(); }); }
     else { cv['onRuntimeInitialized']=onCv; }
   };
 
@@ -271,6 +272,6 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
   }
 })();
 </script>
-<script async src="https://docs.opencv.org/4.10.0/opencv.js" onload="__onCvLoaded()" onerror="document.getElementById('msg').textContent='OpenCV.jsを読み込めませんでした（ネット接続を確認）'"></script>
+<script async src="opencv.js?v=4.10.0" onload="__onCvLoaded()" onerror="document.getElementById('msg').textContent='OpenCV.jsを読み込めませんでした。ページを再読み込みしてください。'"></script>
 </body>
 </html>
