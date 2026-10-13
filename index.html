@@ -5,17 +5,19 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>ArUco FPVラップタイマー</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Roboto+Mono:wght@500;700&display=swap">
 <style>
 /* Layout: カメラ映像 → 現在ラップ → ラップ一覧 → 操作 → 設定 の縦1カラム */
 :root{
   --bg:#0d1014; --panel:#161b22; --line:#28303a; --fg:#e8edf2; --dim:#8b97a5;
   --accent:#ffb627; --ok:#3ddc84; --warn:#ff5d5d;
   --display:"Chakra Petch", ui-monospace, "SF Mono", Menlo, monospace;
+  --mono:"Roboto Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --body:-apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
   color-scheme:dark;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body)}
 body{padding:env(safe-area-inset-top,0) 16px calc(env(safe-area-inset-bottom,0) + 16px)}
 .wrap{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:12px;padding-block:12px}
@@ -33,11 +35,12 @@ body{padding:env(safe-area-inset-top,0) 16px calc(env(safe-area-inset-bottom,0) 
 .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;color:var(--dim);font-size:14px;line-height:1.6}
 .now{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-family:var(--display);font-variant-numeric:tabular-nums}
 .now .lbl{font-size:14px;letter-spacing:.1em;color:var(--dim)}
-.now .t{font-size:clamp(40px,12vw,64px);font-weight:700;color:var(--accent);line-height:1}
+.now .t{font-family:var(--mono);font-size:clamp(40px,12vw,64px);font-weight:700;color:var(--accent);line-height:1}
 .state{font-size:13px;color:var(--dim)}
 .laps{list-style:none;margin:0;padding:0;border-top:1px solid var(--line);max-height:40vh;overflow:auto}
 .laps li{display:flex;justify-content:space-between;align-items:center;padding:8px 2px;border-bottom:1px solid var(--line);font:500 22px var(--display);font-variant-numeric:tabular-nums}
 .laps li .n{color:var(--dim);letter-spacing:.06em}
+.laps li .v{font-family:var(--mono);font-weight:700}
 .laps li.best .v{color:var(--ok)}
 .laps li.flash{animation:flash .8s}
 .laps li .tag{font:500 11px var(--body);color:var(--warn);margin-left:8px}
