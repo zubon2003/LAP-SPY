@@ -71,7 +71,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     <div class="msg" id="msg">OpenCV を読み込み中…</div>
   </div>
 
-  <div class="now"><span class="lbl" id="nowLbl">READY</span><span class="t" id="nowT">0.0000</span></div>
+  <div class="now"><span class="lbl" id="nowLbl">READY</span><span class="t" id="nowT">00.000</span></div>
   <div class="state" id="state">リセット後、最初のゲート通過から計測を始めます。</div>
 
   <ul class="laps" id="laps"><li class="empty">ラップはまだありません</li></ul>
@@ -142,7 +142,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
   let lastPass=null, prevPass=null, laps=[], overwritten=new Set();
   function reset(){
     lastPass=null; prevPass=null; laps=[]; overwritten.clear();
-    nowLbl.textContent='READY'; nowT.textContent='0.0000';
+    nowLbl.textContent='READY'; nowT.textContent='00.000';
     stateEl.textContent='リセットしました。最初のゲート通過から計測を始めます。';
     renderLaps();
   }
@@ -164,7 +164,8 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
       lastPass=t; beep(660); renderLaps(true);
     }
   }
-  const fmt = ms => (ms/1000).toFixed(4);
+  // 秒を 00.000 形式（整数部2桁ゼロ埋め・小数3桁）で表示
+  const fmt = ms => { const t=Math.max(0,Math.floor(ms))/1000; return t.toFixed(3).padStart(6,'0'); };
   function renderLaps(flash){
     lapsEl.textContent='';
     if(!laps.length){ const li=document.createElement('li'); li.className='empty'; li.textContent='ラップはまだありません'; lapsEl.appendChild(li); return; }
