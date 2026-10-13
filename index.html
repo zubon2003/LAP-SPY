@@ -26,6 +26,8 @@ body{padding:env(safe-area-inset-top,0) 16px calc(env(safe-area-inset-bottom,0) 
 .chip{position:absolute;top:8px;left:8px;font:700 12px var(--display);letter-spacing:.08em;padding:4px 8px;border-radius:4px;background:#000a;border:1px solid var(--line);color:var(--dim)}
 .chip.on{color:#000;background:var(--ok);border-color:var(--ok)}
 .fps{position:absolute;top:8px;right:8px;font:500 11px var(--display);color:var(--dim);background:#000a;padding:3px 6px;border-radius:4px}
+.stage{touch-action:none;-webkit-user-select:none;user-select:none}
+.zoom{position:absolute;bottom:8px;right:8px;font:700 13px var(--display);color:var(--fg);background:#000a;padding:4px 8px;border-radius:4px;border:1px solid var(--line)}
 .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;color:var(--dim);font-size:14px;line-height:1.6}
 .now{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-family:var(--display);font-variant-numeric:tabular-nums}
 .now .lbl{font-size:14px;letter-spacing:.1em;color:var(--dim)}
@@ -62,6 +64,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     <canvas id="overlay"></canvas>
     <div class="chip" id="chip">NO MARKER</div>
     <div class="fps" id="fps">-- fps</div>
+    <div class="zoom" id="zoomEl">1.0x</div>
     <div class="msg" id="msg">OpenCV を読み込み中…</div>
   </div>
 
@@ -212,6 +215,39 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     else { cv['onRuntimeInitialized']=onCv; }
   };
 
+  // ---- ズーム（ピンチ） ----
+  let zoom=1, zMin=1, zMax=4, hwZoom=false, track=null;
+  try{ zoom=parseFloat(localStorage.getItem('aruco-lap-zoom'))||1; }catch(e){}
+  const zoomEl=$('zoomEl');
+  function setupZoom(){
+    track = stream ? stream.getVideoTracks()[0] : null;
+    const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+    if(caps && caps.zoom && caps.zoom.max>caps.zoom.min){ hwZoom=true; zMin=caps.zoom.min; zMax=caps.zoom.max; }
+    else { hwZoom=false; zMin=1; zMax=4; }
+    applyZoom(zoom);
+  }
+  let zPending=false;
+  function applyZoom(z){
+    zoom=Math.min(zMax,Math.max(zMin,z));
+    zoomEl.textContent=zoom.toFixed(1)+'x'+(hwZoom?'':' (digital)');
+    try{ localStorage.setItem('aruco-lap-zoom',String(zoom)); }catch(e){}
+    if(hwZoom && track && !zPending){
+      zPending=true;
+      track.applyConstraints({advanced:[{zoom:zoom}]}).catch(()=>{}).finally(()=>{ zPending=false; });
+    }
+  }
+  const stage=$('stage'); let pinch0=0, zoom0=1, lastTap=0;
+  const dist=t=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+  stage.addEventListener('touchstart',e=>{
+    if(e.touches.length===2){ pinch0=dist(e.touches); zoom0=zoom; e.preventDefault(); }
+    else if(e.touches.length===1){ const n=performance.now(); if(n-lastTap<300){ applyZoom(zMin); } lastTap=n; }
+  },{passive:false});
+  stage.addEventListener('touchmove',e=>{
+    if(e.touches.length===2 && pinch0){ applyZoom(zoom0*dist(e.touches)/pinch0); e.preventDefault(); }
+  },{passive:false});
+  stage.addEventListener('touchend',e=>{ if(e.touches.length<2){ pinch0=0; if(hwZoom) applyZoom(zoom); } });
+  ['gesturestart','gesturechange'].forEach(ev=>stage.addEventListener(ev,e=>e.preventDefault()));
+
   // ---- カメラ ----
   let stream=null, wakeLock=null;
   async function startCamera(){
@@ -221,6 +257,7 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
       stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:S.facing.value, width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:60}}});
       video.srcObject=stream; await video.play();
       msg.hidden=true; startBtn.textContent='カメラ再起動';
+      setupZoom();
       try{ wakeLock = await navigator.wakeLock?.request('screen'); }catch(e){}
       scheduleFrame();
     }catch(e){ msg.hidden=false; msg.textContent='カメラを開けません: '+(e.message||e)+'（HTTPSで開いているか、カメラの許可を確認してください）'; }
@@ -246,11 +283,13 @@ select,input[type=number],input[type=text]{font:16px var(--body);padding:8px;bor
     // 映像の上端から 4:3 の範囲を切り出す（横幅いっぱい。収まらない場合は高さいっぱいで左右中央）
     let cw=vw, ch=Math.round(vw*3/4), cx=0;
     if(ch>vh){ ch=vh; cw=Math.round(vh*4/3); cx=Math.round((vw-cw)/2); }
+    let cy=0;
+    if(!hwZoom && zoom>1){ const nw=Math.round(cw/zoom), nh=Math.round(ch/zoom); cx+=Math.round((cw-nw)/2); cy=Math.round((ch-nh)/2); cw=nw; ch=nh; }
     const pw=Math.min(parseInt(S.procW.value,10)||640, cw), ph=Math.round(pw*3/4);
     if(proc.width!==pw||proc.height!==ph){ proc.width=pw; proc.height=ph;
       if(src){src.delete(); gray.delete();} src=new cv.Mat(ph,pw,cv.CV_8UC4); gray=new cv.Mat(); }
     if(overlay.width!==pw||overlay.height!==ph){ overlay.width=pw; overlay.height=ph; }
-    pctx.drawImage(video,cx,0,cw,ch,0,0,pw,ph);
+    pctx.drawImage(video,cx,cy,cw,ch,0,0,pw,ph);
     src.data.set(pctx.getImageData(0,0,pw,ph).data);
     cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
     detector.detectMarkers(gray,corners,ids,rejected);
